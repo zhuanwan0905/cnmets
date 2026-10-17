@@ -52,29 +52,43 @@ def oss_put(ak, sk, token, bucket, endpoint, object_key, data, content_type, ser
     with urllib.request.urlopen(req, timeout=30) as r:
         return r.status, r.read().decode(errors="ignore")
 
-def build_speex(mp3_path, speex_path):
-    """优先用 ffmpeg 将 mp3 转为 16kHz 单声道 .speex；无 ffmpeg 时降级为复制 mp3 数据。
-
-    返回 (是否降级, 提示信息)。降级仅拷贝数据，文件仍以 .speex 后缀上传。
-    """
-    ffmpeg_candidates = ["ffmpeg", r"D:\ffmpeg\bin\ffmpeg.exe"]
-    ffmpeg = None
-    for cand in ffmpeg_candidates:
+def find_ffmpeg():
+    """在 PATH 与常见安装位置中查找 ffmpeg.exe，返回绝对路径或 None。"""
+    candidates = ["ffmpeg", r"D:\ffmpeg\bin\ffmpeg.exe",
+                  r"C:\ffmpeg\bin\ffmpeg.exe",
+                  r"C:\Program Files\ffmpeg\bin\ffmpeg.exe"]
+    # WinGet 安装位置（Gyan.FFmpeg / BtbN 等）
+    import glob
+    for base in (os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages"),):
+        candidates += glob.glob(base + r"\**\ffmpeg.exe", recursive=True)
+    for cand in candidates:
         try:
             if os.path.isfile(cand):
-                ffmpeg = cand
-                break
+                return cand
             subprocess.run([cand, "-version"], stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, timeout=10)
-            ffmpeg = cand
-            break
+            return cand
         except (OSError, subprocess.SubprocessError):
             continue
+    return None
+
+
+def build_speex(mp3_path, speex_path):
+    """用 ffmpeg 将 mp3 转为 16kHz 单声道真 speex（Ogg 封装，libspeex 编码）。
+
+    讯飞 ise 链路常见格式为 Ogg/Speex（16kHz 单声道）。ffmpeg 无法以裸 .speex
+    扩展名自动选容器，故显式指定 -f ogg 封装。无 ffmpeg 或转码失败时降级为
+    复制 mp3 数据并以 .speex 后缀上传并告警。
+
+    返回 (是否降级, 提示信息)。
+    """
+    ffmpeg = find_ffmpeg()
     if ffmpeg:
-        cmd = [ffmpeg, "-y", "-i", mp3_path, "-ar", "16000", "-ac", "1", speex_path]
+        cmd = [ffmpeg, "-y", "-i", mp3_path, "-ar", "16000", "-ac", "1",
+               "-c:a", "libspeex", "-f", "ogg", speex_path]
         r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
         if r.returncode == 0 and os.path.isfile(speex_path) and os.path.getsize(speex_path) > 0:
-            return False, f"ffmpeg 转换成功: {ffmpeg}"
+            return False, f"ffmpeg 真 speex 转换成功(Ogg封装): {ffmpeg}"
         return True, f"ffmpeg 转换失败(rc={r.returncode})，降级直传 mp3 数据"
     return True, "未检测到 ffmpeg，降级直传 mp3 数据(以 .speex 后缀上传)"
 
