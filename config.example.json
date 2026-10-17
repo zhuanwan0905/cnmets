@@ -6,8 +6,15 @@
     "device_name": "",
     "sn": ""
   },
+  "tts": {
+    "model_dir": "",
+    "ref_wav": "",
+    "cosyvoice_src": ""
+  },
   "submit": {
     "mp3": "",
+    "xml": "",
+    "mark_trace_id": "",
     "acc_id": "",
     "homework_id": "",
     "set_id": "",

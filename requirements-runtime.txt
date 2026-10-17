@@ -1,0 +1,10 @@
+# e听说自动化补交 - 运行依赖
+# 安装: pip install -r requirements-runtime.txt
+# 提示: torch 默认为 CPU 版；有 NVIDIA GPU 可自行换装 cu 版
+curl_cffi
+torch
+torchaudio
+cosyvoice
+Matcha-TTS
+modelscope
+huggingface_hub

@@ -2,3 +2,8 @@
 __pycache__/
 *.py[cod]
 config.local.json
+.venv/
+models/
+dist/
+build/
+*.spec
