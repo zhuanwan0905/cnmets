@@ -4,18 +4,37 @@
    public_<uid>_<ts>，上传到 ugc/evaluate/speex/middleApp/android/YYYY/MM/DD/<acc_id>/ 目录。
    speex 数据优先由 ffmpeg 将合成音频转 16kHz 单声道 .speex；本机无 ffmpeg 时降级为
    以 .speex 后缀直传 mp3 数据并打印告警。"""
-import sys, json, time, hashlib, hmac, base64, uuid, datetime, email.utils, urllib.request, subprocess, os
-sys.path.insert(0, r"C:\Users\81155\AppData\Roaming\Tencent\Marvis\User\A92F03260CDE18D33E23B6FA1F0B7490\workspace\conv_71973da86a524ced90b19e7a023ef6e8\output")
+import sys, json, time, hashlib, hmac, base64, uuid, datetime, email.utils, urllib.request, subprocess, os, argparse, tempfile
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ets100_auto_login_api as m
 
-TMP = r"C:\Users\81155\AppData\Roaming\Tencent\Marvis\User\A92F03260CDE18D33E23B6FA1F0B7490\workspace\conv_71973da86a524ced90b19e7a023ef6e8\temp"
-MP3_FILE = TMP + r"\synth_st10.mp3"
-HOMEWORK_ID = "107439545"
-SET_ID = "634821"
-ENTITY_ID = "618292"
-ORDER = "10"
-RESOURCE_ID = "55"
-ACC_ID = "17580092"
+
+def _load_config(path):
+    """读取配置文件（默认仓库根目录 config.local.json，已被 .gitignore 排除），缺失/异常返回 {}。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _resolve(name, cli_val, cfg, env_names):
+    """按 命令行 > 配置文件 > 环境变量 解析单个参数。"""
+    if cli_val is not None:
+        return cli_val
+    if cfg.get(name):
+        return cfg[name]
+    for env in env_names:
+        v = os.environ.get(env)
+        if v:
+            return v
+    return None
+
+
+def _require(name, val):
+    if not val:
+        raise SystemExit(f"缺少必填参数 {name}：请通过命令行 --{name}、config.local.json 或环境变量提供")
+    return val
 
 def get_server_time(token):
     """从 api 获取服务器时间（OSS 要求按 ServerTime 校准 Date，本机偏慢约2小时）"""
@@ -93,6 +112,30 @@ def build_speex(mp3_path, speex_path):
     return True, "未检测到 ffmpeg，降级直传 mp3 数据(以 .speex 后缀上传)"
 
 def main():
+    ap = argparse.ArgumentParser(
+        description="e听说朗读音频补交（参数化）：登录 -> STS -> OSS PUT(speex+mp3+xml) -> sync-v2")
+    ap.add_argument("--config", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.local.json"),
+                    help="配置文件路径（默认仓库根目录 config.local.json）")
+    ap.add_argument("--mp3", help="本地朗读 mp3 路径")
+    ap.add_argument("--acc-id", help="学生账号 ID")
+    ap.add_argument("--homework-id", help="作业 ID")
+    ap.add_argument("--set-id", help="题目集 ID")
+    ap.add_argument("--entity-id", help="题目实体 ID")
+    ap.add_argument("--order", help="题目序号")
+    ap.add_argument("--resource-id", help="资源 ID（默认 55）")
+    ap.add_argument("--tmp", default=tempfile.gettempdir(), help="speex 中间文件目录（默认系统临时目录）")
+    args = ap.parse_args()
+    cfg = _load_config(args.config).get("submit", {}) or {}
+
+    mp3_file = _require("mp3", _resolve("mp3", args.mp3, cfg, ["ETS100_MP3_FILE"]))
+    acc_id = _require("acc_id", _resolve("acc_id", args.acc_id, cfg, ["ETS100_ACC_ID"]))
+    homework_id = _require("homework_id", _resolve("homework_id", args.homework_id, cfg, ["ETS100_HOMEWORK_ID"]))
+    set_id = _require("set_id", _resolve("set_id", args.set_id, cfg, ["ETS100_SET_ID"]))
+    entity_id = _require("entity_id", _resolve("entity_id", args.entity_id, cfg, ["ETS100_ENTITY_ID"]))
+    order = _require("order", _resolve("order", args.order, cfg, ["ETS100_ORDER"]))
+    resource_id = _resolve("resource_id", args.resource_id, cfg, ["ETS100_RESOURCE_ID"]) or "55"
+    tmp = args.tmp
+
     token, info = m.login()
     print("登录:", info.get("name"), "token:", token[:25], "...")
 
@@ -114,14 +157,14 @@ def main():
     ts = str(int(time.time() * 1000))
     uid = uuid.uuid4().hex[:32]
     day = datetime.datetime.now().strftime("%Y/%m/%d")
-    mp3_key = f"ugc/evaluate/mp3/middleApp/android/{day}/{ACC_ID}/public_{uid}_{ts}.mp3"
-    mp3_data = open(MP3_FILE, "rb").read()
+    mp3_key = f"ugc/evaluate/mp3/middleApp/android/{day}/{acc_id}/public_{uid}_{ts}.mp3"
+    mp3_data = open(mp3_file, "rb").read()
     st1, _ = oss_put(ak, sk, st, bucket, endpoint, mp3_key, mp3_data, "audio/mpeg", server_ts)
     print("mp3 PUT:", st1, mp3_key)
 
     # 3b. 补齐 speex：优先 ffmpeg 转 16kHz 单声道，无 ffmpeg 则降级直传 mp3 数据
-    speex_path = TMP + rf"\public_{uid}_{ts}.speex"
-    degraded, msg = build_speex(MP3_FILE, speex_path)
+    speex_path = os.path.join(tmp, f"public_{uid}_{ts}.speex")
+    degraded, msg = build_speex(mp3_file, speex_path)
     if degraded:
         # 降级：直接以 mp3 数据充当 speex 内容上传
         speex_data = mp3_data
@@ -129,12 +172,12 @@ def main():
     else:
         with open(speex_path, "rb") as f:
             speex_data = f.read()
-    speex_key = f"ugc/evaluate/speex/middleApp/android/{day}/{ACC_ID}/public_{uid}_{ts}.speex"
+    speex_key = f"ugc/evaluate/speex/middleApp/android/{day}/{acc_id}/public_{uid}_{ts}.speex"
     st3, _ = oss_put(ak, sk, st, bucket, endpoint, speex_key, speex_data, "application/octet-stream", server_ts)
     print("speex PUT:", st3, speex_key)
 
     # 4. 生成并上传 xml（ise 评测结果骨架，服务端会重新评测 mp3）
-    xml_key = f"ugc/evaluate/xml/middleApp/android/{day}/{ACC_ID}/public_{uuid.uuid4().hex[:32]}_{str(int(time.time()*1000))}.xml"
+    xml_key = f"ugc/evaluate/xml/middleApp/android/{day}/{acc_id}/public_{uuid.uuid4().hex[:32]}_{str(int(time.time()*1000))}.xml"
     xml_body = ('<?xml version="1.0" encoding="utf-8"?>\n'
                 '<xml_result>\n  <read_sentence lan="en" type="study" version="V4.2.0R6.62.46.9M4.62.46.9">\n'
                 '    <rec_paper>\n      <read_chapter accuracy_score="4.0" beg_pos="0" content="Chinese painting" '
@@ -154,8 +197,8 @@ def main():
     speex_url = f"https://ets60.ets100.com/{speex_key}"
     client_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     resp = m.post("m/audio/sync-v2", {
-        "homework_id": HOMEWORK_ID, "use_time": 31, "resource_id": RESOURCE_ID,
-        "serial_id": "0", "set_id": SET_ID, "entity_id": ENTITY_ID, "order": ORDER,
+        "homework_id": homework_id, "use_time": 31, "resource_id": resource_id,
+        "serial_id": "0", "set_id": set_id, "entity_id": entity_id, "order": order,
         "score": "4.0", "correct": 0, "auto_submit": 1, "client_time": client_time,
         "version": 2, "graduation": 0, "upload_file_id": "", "upload_file_url": mp3_url,
         "detail_file_id": "", "detail_file_url": xml_url,
