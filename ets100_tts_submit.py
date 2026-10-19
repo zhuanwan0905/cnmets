@@ -248,11 +248,14 @@ def main():
     ap.add_argument("--order", help="题目序号")
     ap.add_argument("--resource-id", help="资源 ID（默认 55）")
     ap.add_argument("--tmp", default=tempfile.gettempdir(), help="中间文件目录（默认系统临时目录）")
+    ap.add_argument("--keep-audio", action="store_true",
+                    help="保留本次生成的音频文件（默认提交成功后自动删除生成的 wav/mp3/speex）")
     args = ap.parse_args()
 
     cfg = load_cfg(args.config)
     tts_cfg = cfg.get("tts", {}) or {}
     sub_cfg = cfg.get("submit", {}) or {}
+    generated = []  # 本次自动生成的音频中间文件，提交后默认清理
 
     # ---- 提交参数（命令行 > 配置文件 > 环境变量）
     acc_id = sub._require("acc_id", sub._resolve("acc_id", args.acc_id, sub_cfg, ["ETS100_ACC_ID"]))
@@ -308,9 +311,11 @@ def main():
         wav_file = os.path.join(tmp, f"synth_{ts}.wav")
         cosyvoice_src = resolve("cosyvoice_src", args.cosyvoice_src, tts_cfg, ["ETS100_COSYVOICE_SRC"])
         synth_tts(model_dir, ref_wav, text, wav_file, cosyvoice_src)
+        generated.append(wav_file)
         # 转 16k mp3（提交链路统一 16kHz）
         ffmpeg = sub.find_ffmpeg()
         mp3_file = os.path.join(tmp, f"synth_{ts}.mp3")
+        generated.append(mp3_file)
         if ffmpeg:
             r = sub.subprocess.run([ffmpeg, "-y", "-i", wav_file, "-ar", "16000", "-ac", "1",
                                     "-codec:a", "libmp3lame", "-b:a", "64k", mp3_file],
@@ -358,6 +363,7 @@ def main():
     else:
         with open(speex_path, "rb") as f:
             speex_data = f.read()
+    generated.append(speex_path)
     speex_key = f"ugc/evaluate/speex/middleApp/android/{day}/{acc_id}/public_{uid}_{ts}.speex"
     st3, _ = sub.oss_put(ak, sk, st, bucket, endpoint, speex_key, speex_data, "application/octet-stream", server_ts)
     print("speex PUT:", st3, speex_key)
@@ -398,6 +404,23 @@ def main():
         print("\n提交成功。是否入册请到 App 端确认（过期作业 complete 可能仍为 0）。")
     else:
         print("\n提交未成功，请根据返回信息排查（常见：账号密文失效需重新抓包）。")
+
+    # ---- 自动清理本次生成的中间音频（wav/mp3/speex）
+    if not args.keep_audio and generated:
+        removed = []
+        for p in generated:
+            try:
+                if os.path.isfile(p):
+                    os.remove(p)
+                    removed.append(p)
+            except OSError as e:
+                print("清理失败:", p, e)
+        if removed:
+            print(f"已自动删除 {len(removed)} 个中间音频文件: {[os.path.basename(p) for p in removed]}")
+    elif args.keep_audio:
+        print("--keep-audio 已指定，保留本次生成的音频文件:")
+        for p in generated:
+            print("  ", p)
 
 
 if __name__ == "__main__":

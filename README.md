@@ -88,9 +88,12 @@ python ets100_auto_login_api.py
 - body 为紧凑 JSON 数组 `[{"r": endpoint, "params": {...}}]` 的 Base64
 - 传输需模拟 Android 指纹（curl_cffi `chrome131_android`），HTTP/2 易 405
 - 朗读题上传链路：`ossEvaluateUploadStsToken` 取 STS → OSS V1 签名 PUT（speex+mp3+xml 三件套，Date 按 ServerTime 校准）→ `m/audio/sync-v2` 登记
+- 选择题提交链路：`m/audio/sync-v2` 携带 `score_detail.choose`（`category=choose`），音频字段全空；每道小题一个请求，服务端按 choose 写入作答记录并计入完成度
 
 ## 已知边界
 
-- 客观题答案不在下发数据中（show_score_answer=0），需运行时逆向或 OCR
+- 客观题答案不在下发接口明文里（show_score_answer=0），但题目包 zip 可解密后从 info.json 的 xtlist.stander_ans 提取（seed/密码算法见 `ets100_choose_submit.py`）
+- 选择题补交：`m/audio/sync-v2` 带 `score_detail.choose`（category=choose）可写入作答记录并计入完成度；纯分数上报（无 choose）不会被统计
+- 历史/已归档作业（status=5 列表）完成度快照冻结，补交不更新 complete
 - 朗读题服务端会对上传音频重做 ise 评测，TTS 合成音难以达到完成线，需真人录音或高仿真克隆音
 - speex 必须用 `ffmpeg -f ogg libspeex` 真编码，否则评测全 0 分
